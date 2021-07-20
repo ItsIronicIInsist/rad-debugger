@@ -1,0 +1,110 @@
+   Compiling debugger v0.1.0 (/home/zac/programming/rust/debugger)
+warning: type `breakpoint` should have an upper camel case name
+ --> src/breakpoint.rs:5:12
+  |
+5 | pub struct breakpoint {
+  |            ^^^^^^^^^^ help: convert the identifier to upper camel case: `Breakpoint`
+  |
+  = note: `#[warn(non_camel_case_types)]` on by default
+
+warning: value assigned to `addr` is never read
+  --> src/debugger.rs:52:9
+   |
+52 |                 let mut addr = 0; 
+   |                     ^^^^^^^^
+   |
+   = note: `#[warn(unused_assignments)]` on by default
+   = help: maybe it is overwritten before being read?
+
+warning: associated function is never used: `disable`
+  --> src/breakpoint.rs:35:9
+   |
+35 |     pub fn disable(&mut self) {
+   |            ^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: unused `std::result::Result` that must be used
+  --> src/main.rs:26:4
+   |
+26 |             ptrace::traceme();    
+   |             ^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_must_use)]` on by default
+   = note: this `Result` may be an `Err` variant, which should be handled
+
+warning: unused `std::result::Result` that must be used
+  --> src/main.rs:30:4
+   |
+30 |             execv(&prog, &[prog.clone()]);
+   |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this `Result` may be an `Err` variant, which should be handled
+
+warning: method `New` should have a snake case name
+  --> src/debugger.rs:15:9
+   |
+15 |     pub fn New(child: Pid) -> Debugger {
+   |            ^^^ help: convert the identifier to snake case: `new`
+   |
+   = note: `#[warn(non_snake_case)]` on by default
+
+warning: unused `std::result::Result` that must be used
+  --> src/debugger.rs:28:3
+   |
+28 |         wait::waitpid(self.m_pid, None);
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this `Result` may be an `Err` variant, which should be handled
+
+warning: variable `inputHandler` should have a snake case name
+  --> src/debugger.rs:29:11
+   |
+29 |         let mut inputHandler = Editor::<()>::new();
+   |                 ^^^^^^^^^^^^ help: convert the identifier to snake case: `input_handler`
+
+warning: variable `inputLine` should have a snake case name
+  --> src/debugger.rs:31:8
+   |
+31 |             let inputLine = inputHandler.readline("dbg> ");
+   |                 ^^^^^^^^^ help: convert the identifier to snake case: `input_line`
+
+warning: variable `inputLine` should have a snake case name
+  --> src/debugger.rs:32:8
+   |
+32 |             let inputLine = match inputLine {
+   |                 ^^^^^^^^^ help: convert the identifier to snake case: `input_line`
+
+warning: unused `std::result::Result` that must be used
+  --> src/debugger.rs:48:5
+   |
+48 |                 ptrace::cont(self.m_pid, None);
+   |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this `Result` may be an `Err` variant, which should be handled
+
+warning: method `New` should have a snake case name
+  --> src/breakpoint.rs:14:9
+   |
+14 |     pub fn New(proc: Pid, target_addr: usize) -> breakpoint {
+   |            ^^^ help: convert the identifier to snake case: `new`
+
+warning: unused `std::result::Result` that must be used
+  --> src/breakpoint.rs:30:12
+   |
+30 |         unsafe { ptrace::write(self.pid, self.addr as *mut c_void, data as *mut c_void); }
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this `Result` may be an `Err` variant, which should be handled
+
+warning: unused `std::result::Result` that must be used
+  --> src/breakpoint.rs:40:12
+   |
+40 |         unsafe { ptrace::write(self.pid, self.addr as *mut c_void, data as *mut c_void); }
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this `Result` may be an `Err` variant, which should be handled
+
+warning: 14 warnings emitted
+
+    Finished dev [unoptimized + debuginfo] target(s) in 0.56s
