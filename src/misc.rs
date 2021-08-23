@@ -100,3 +100,32 @@ pub fn dict_to_regs(dict: HashMap<&str, u64>) -> user_regs_struct {
 	}
 }
 
+pub fn dump_regs(dict: HashMap<&str, u64>) {
+	println!("rax: {:#x}", *dict.get("rax").unwrap());
+	println!("rbx: {:#x}", *dict.get("rbx").unwrap());
+	println!("rcx: {:#x}", *dict.get("rcx").unwrap());
+	println!("rdx: {:#x}", *dict.get("rdx").unwrap());
+	println!("rdi: {:#x}", *dict.get("rdi").unwrap());
+	println!("rsi: {:#x}", *dict.get("rsi").unwrap());
+	println!("rbp: {:#x}", *dict.get("rbp").unwrap());
+	println!("rsp: {:#x}", *dict.get("rsp").unwrap());
+	println!("rip: {:#x}", *dict.get("rip").unwrap());
+	println!("r8: {:#x}", *dict.get("r8").unwrap());
+	println!("r9: {:#x}", *dict.get("r9").unwrap());
+	println!("r10: {:#x}", *dict.get("r10").unwrap());
+	println!("r11: {:#x}", *dict.get("r11").unwrap());
+	println!("r12: {:#x}", *dict.get("r12").unwrap());
+	println!("r13: {:#x}", *dict.get("r13").unwrap());
+	println!("r14: {:#x}", *dict.get("r14").unwrap());
+	println!("r15: {:#x}", *dict.get("r15").unwrap());
+	println!("eflags: {:#x}", *dict.get("eflags").unwrap());
+	println!("cs: {:#x}", *dict.get("cs").unwrap());
+	println!("ds: {:#x}", *dict.get("ds").unwrap());
+	println!("es: {:#x}", *dict.get("es").unwrap());
+	println!("fs: {:#x}", *dict.get("fs").unwrap());
+	println!("gs: {:#x}", *dict.get("gs").unwrap());
+	println!("ss: {:#x}", *dict.get("ss").unwrap());
+	println!("gs_base: {:#x}", *dict.get("gs_base").unwrap());
+	println!("fs_base: {:#x}", *dict.get("fs_base").unwrap());
+	println!("orig_rax: {:#x}", *dict.get("orig_rax").unwrap());
+}

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use core::ffi::c_void;
 use core::ops::Range;
 
-use crate::breakpoint::breakpoint;
+use crate::breakpoint::{breakpoint, bp_storage};
 use crate::misc::*;
 use crate::format::*;
 
@@ -21,8 +21,8 @@ pub enum dbg_cmd {
 
 pub struct Debugger {
 	pub m_pid: Pid, //pid of child
-	bp_table: HashMap<usize, breakpoint>, //hashmap of all breakpoints currently set
-	//bp_table: Vec<breakpoint>,
+	bp_table: bp_storage,
+	//bp_table: HashMap<usize, breakpoint>, //hashmap of all breakpoints currently set
 	valid_mem: Vec<Range<usize>>, //All valid memory addresses, to be checked before each memory access
 }
 
@@ -31,15 +31,14 @@ impl Debugger {
 	pub fn New(child: Pid) -> Debugger {
 		Debugger {
 			m_pid: child,
-			bp_table: HashMap::new(),
-			//bp_table: Vec::new(),
+			bp_table: bp_storage::New(),
 			valid_mem: Vec::new(),
 		}
 	}
 	
 	//more for internal use rather than ofr direct handling of user commands
-	fn get_reg(&self, reg: &str) -> Result<u64, Errno> {
-		let regs =  match ptrace::getregs(self.m_pid) {
+	fn get_reg(pid: Pid, reg: &str) -> Result<u64, Errno> {
+		let regs =  match ptrace::getregs(pid) {
 			Ok(regs_val) => regs_val,
 			Err(err_num) => return Err(err_num),
 		};
@@ -47,8 +46,8 @@ impl Debugger {
 		Ok(regs[reg])
 	}
 
-	fn set_reg(&self, reg: &str, val: u64) -> Result<(), Errno> {
-		let regs =  match ptrace::getregs(self.m_pid) {
+	fn set_reg(pid: Pid, reg: &str, val: u64) -> Result<(), Errno> {
+		let regs =  match ptrace::getregs(pid) {
 			Ok(regs_val) => regs_val,
 			Err(err_num) => return Err(err_num),
 		};
@@ -56,7 +55,7 @@ impl Debugger {
 		regs.insert(reg , val);
 		let regs = dict_to_regs(regs); 
 		
-		match ptrace::setregs(self.m_pid, regs) {
+		match ptrace::setregs(pid, regs) {
 			Ok(_) => Ok(()),
 			Err(err_num) => Err(err_num),
 		}
@@ -121,8 +120,7 @@ impl Debugger {
 		match command {
 			//sent continue signal and wait for next pid
 			"continue" | "cont" | "c" => {
-				ptrace::cont(self.m_pid, None);
-				wait::waitpid(self.m_pid, None);
+				self.continue_exec();
 			},
 			"break" | "breakpoint" | "b" => {
 				self.handle_breakpoints(args);
@@ -148,20 +146,58 @@ impl Debugger {
 		dbg_result
 	}
 
+	fn continue_exec(&mut self) {
+		//get value of pc
+		let addr =  (Debugger::get_reg(self.m_pid, "rip").unwrap() - 1) as usize;
+		
+		//check if there is a breakpoint at that addr
+		if self.bp_table.addr_list.contains(&addr) {
+			//cant search for it smartly so just check every breakpoint (sadly)
+			for bp_opt in &mut self.bp_table.bp_list {
+				let mut bp;
+				match bp_opt {
+					None => {
+						continue;
+					},
+					Some(bp_tmp) => {
+						bp=bp_tmp;
+					},
+				}
+				//found the brekapoint at the address but its already disable. All good
+				if bp.addr == addr && bp.enabled == false {
+					break;
+				}
+				//found breakpooint and its enabed, so need to step around it
+				else if bp.addr == addr && bp.enabled == true {
+					bp.disable();
+					Debugger::set_reg(self.m_pid, "rip", addr as u64);
+					ptrace::step(self.m_pid, None);
+					wait::waitpid(self.m_pid, None);
+					bp.enable();
+					break;
+				}
+			}
+		}
+		
+		ptrace::cont(self.m_pid, None);
+		wait::waitpid(self.m_pid, None);
+//		println!("{:?}", ptrace::getsiginfo(self.m_pid).unwrap());
+	}
+
 	fn handle_breakpoints(&mut self, args: Vec<&str>) {
 	//b list | l
-	//b disable | d <addr>
-	//b enabled | e <addr>
-	//b delete | de <addr>
-	//b <addr>
+	//b disable | d <idx>
+	//b enabled | e <idx>
+	//b delete | de <idx>
+	//b <idx>
 		if args.len() < 2 {
 			println!("Breakpoint command needs second argument");
 			return;
 		}
 
-		let mut addr = 0;
-		//the commands which need an address specified
-		//need to check its a valid address (or theres on at all)
+		let mut idx = 0;
+		//the commands which need an index specified
+		//need to check its a valid index (or theres on at all)
 		match args[1] {
 			"disable" | "d" | "enable" | "e" | "delete" | "de" => {
 				if args.len() < 3 {
@@ -169,10 +205,10 @@ impl Debugger {
 				}
 				match str_to_int(args[2]) {
 					Some(num) => {
-						addr = num;
+						idx = num;
 					},
 					None => {
-						println!("Invalid address specified");
+						println!("Invalid index specified");
 						return;
 					},
 				};
@@ -186,21 +222,36 @@ impl Debugger {
 			},
 			"disable" | "d" => {
 				if args.len() < 3 {
-					println!("Need address specified to disable breakpoint");
+					println!("Need index specified to disable breakpoint");
 				}
-				self.disable_breakpoint(addr);
+				match self.bp_table.disable(idx) {
+					Ok(_) => {},
+					Err(_) => {
+						println!("Error disabling breakpoint. Invalid index.");
+					},
+				};
 			},
 			"enable" | "e" => {
 				if args.len() < 3 {
-					println!("Need address specified to enable breakpoint");
+					println!("Need index specified to enable breakpoint");
 				}
-				self.enable_breakpoint(addr);
+				match self.bp_table.enable(idx) {
+					Ok(_) => {},
+					Err(_) => {
+						println!("Error enabling breakpoint. Invalid index.");
+					},
+				};
 			},
 			"delete" | "de" => {
 				if args.len() < 3 {
-					println!("Need address specified to delete breakpoint");
+					println!("Need index specified to delete breakpoint");
 				}
-				self.delete_breakpoint(addr);
+				match self.bp_table.delete(idx) {
+					Ok(_) => {},
+					Err(_) => {
+						println!("Error deleting breakpoint. Invalid index.");
+					},
+				};
 			},
 			//Default behaviour is to create a breakpoint (if no other command is given)
 			_  => {
@@ -230,64 +281,26 @@ impl Debugger {
 				return;
 			},
 		}
-		self.bp_table.entry(addr).or_insert(bp);
+		match self.bp_table.insert(bp) {
+			Ok(_) => {},
+			Err(_) => {
+				println!("Error creating breakpoint. There is already a breakpoint at that address");
+			},
+		};
 	}
 
 	//list of breakpoints (their addresses and if they're enbaled
 	fn list_breakpoints(&self) {
-		if self.bp_table.is_empty() == false {
-			println!("<addr>: <set?>");
-		}
-		for (addr, bp) in self.bp_table.iter() {
-			println!("<{:#x}>: <{}>", addr, bp.enabled); 
-		}
-	}
-
-	fn delete_breakpoint(&mut self, addr: usize) {
-		self.disable_breakpoint(addr);
-		self.bp_table.remove(&addr);
-	}
-
-	fn disable_breakpoint(&mut self, addr: usize) {
-		let mut bp : breakpoint;
-		match self.bp_table.get(&addr) {
-			Some(val) => {
-				bp = *val;
-			}
-			None => {
-				println!("No breakpoint set at that address");
-				return;
-			}
-		}
-		match bp.disable() {
-			Ok(_) => {},
-			Err(err_num) => {
-				println!("Failed to disable breakpoint.\n Ptrace read request failed with err {}", err_num);
-			},
-		}
-		self.bp_table.insert(addr, bp);
-	}
-
-	fn enable_breakpoint(&mut self, addr: usize) {
-		let mut bp : breakpoint;
-		match self.bp_table.get(&addr) {
-			Some(val) => {
-				bp = *val;
-			}
-			None => {
-				println!("No breakpoint set at that address");
-				return;
-			}
-		}
-
-		match bp.enable() {
-			Ok(_) => {},
-			Err(err_num) => {
-				println!("Failed to enable breakpoint.\n Ptrace read request failed with err {}", err_num);
-			},
+		println!("<idx>: <set?>: <addr>");
+		for (idx, bp_maybe) in self.bp_table.bp_list.iter().enumerate() {
+			match bp_maybe {
+				Some(bp) => {
+					println!("<{}>: <{}>: <{:#x}>", idx, bp.enabled, bp.addr); 
+				},
+				None => {},
+			};
 		}
 	}
-
 
 	fn handle_regs(&self, args: Vec<&str>) {
 		let regs = match  ptrace::getregs(self.m_pid) {
@@ -301,9 +314,7 @@ impl Debugger {
 	
 		//just dumping register
 		if args.len() < 2 {
-			for (reg, val) in regs.iter() {
-				println!("{}: {:#x}", reg, val);
-			}
+			dump_regs(regs);
 			return;
 		}
 		
@@ -385,7 +396,7 @@ impl Debugger {
 			//and that scenario occurs when the user specifies 8 bytes (e.g no bitmask)
 			println!("{:?}", fmt);
 			let modified_val = fmt.trim_val(user_num) | (orig_reg_val & (u64::MAX -  ( (2u128.pow((fmt.n_bytes*8) as u32) -1) as u64) ) );
-			match self.set_reg(args[2], modified_val) {
+			match Debugger::set_reg(self.m_pid, args[2], modified_val) {
 				Ok(_) => {},
 				Err(err_num) => {
 					println!("Failed to write to register.\n Error in ptrace request. Error code was {}", err_num);
@@ -483,3 +494,4 @@ impl Debugger {
 		}
 	}
 }
+
