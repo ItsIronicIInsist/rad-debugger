@@ -11,7 +11,9 @@ use core::ops::Range;
 use crate::breakpoint::{breakpoint, bp_storage};
 use crate::misc::*;
 use crate::format::*;
+use crate::dwarf_functionality::{get_func_from_pc, line_stuff};
 
+use gimli::read::Dwarf;
 
 pub enum dbg_cmd {
 	Exit,
@@ -75,7 +77,7 @@ impl Debugger {
 	
 	//the bool returned indicates if debugger is to restart
 	//the restart and exit commands are handled through this return statement
-	pub fn run<T: Helper>(&mut self, inputHandler: &mut Editor::<T>) -> bool {
+	pub fn run<T: Helper>(&mut self, inputHandler: &mut Editor::<T>, dwarf_info: &Dwarf<gimli::EndianSlice<gimli::RunTimeEndian>>) -> bool {
 		//wait for child to startup. It sends signa when its finished setting up
 		wait::waitpid(self.m_pid, None);
 		//setting up rustyline 
@@ -91,7 +93,7 @@ impl Debugger {
 			//we record all commands to history, not just valid ones (so that small typos can be recorded and fixed)
 			//so its fine. We do need to clone though because it moves the value into the editor
 			inputHandler.add_history_entry(inputLine.clone());
-			match self.handle_command(&inputLine) {
+			match self.handle_command(&inputLine, dwarf_info) {
 				dbg_cmd::Continue => {},
 				dbg_cmd::Exit => {return false;},
 				dbg_cmd::Restart => {return true;},
@@ -99,7 +101,7 @@ impl Debugger {
 		}
 	}
 
-	fn handle_command(&mut self, command: &str) -> dbg_cmd {
+	fn handle_command(&mut self, command: &str, dwarf_info: &Dwarf<gimli::EndianSlice<gimli::RunTimeEndian>>) -> dbg_cmd {
 		let tmp : Vec<&str> = command.split(' ').collect();
 		let mut args : Vec<&str> = vec!();
 		for arg in tmp {
@@ -140,7 +142,13 @@ impl Debugger {
 			"restart" => {
 				dbg_result = dbg_cmd::Restart;
 			}
-
+			"dwarf" => {
+				match get_func_from_pc(dwarf_info, 0x113e) {
+					Some(die) => {println!("{:?}",die);},
+					None => {},
+				}
+				line_stuff(dwarf_info);
+			}
 			_ => {println!("Invalid command");},
 		};
 		dbg_result
