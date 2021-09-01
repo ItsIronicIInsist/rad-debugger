@@ -11,6 +11,12 @@ use crate::debugger::Debugger;
 use crate::misc::{regs_to_dict,dict_to_regs};
 use crate::breakpoint::breakpoint;
 
+
+//Slightly janky but when 'restoring trace', have to run the _start and dl_start and all tha
+//to do all the dynamic linking. To detect when thats finished, we check when rip isnt in 'the shared library section'
+//because used code is always palced somewhere in 0x5500000000000
+const SHARED_LIB_BASE_ADDR : u64 = 0x7f0000000000;
+
 #[derive(Serialize,Deserialize)]
 pub struct Trace<'a> {
 	//registers values when snapshot command was issued
@@ -82,7 +88,12 @@ impl<'a> Trace<'a> {
 				return;
 			}
 		};
-		trace_var.set_trace_regs(regs_to_dict(regs));
+		let mut regs = regs_to_dict(regs);
+
+		if dbg.bp_table.contains((regs["rip"] - 1) as usize) {
+			regs.insert("rip", regs["rip"] - 1);
+		}
+		trace_var.set_trace_regs(regs);
 
 		let addr_maps = get_heap_and_stack(dbg);
 		for map in addr_maps {
@@ -119,7 +130,21 @@ impl<'a> Trace<'a> {
 		//might need tow rap the fie in a BufReader
 		let mut temp_str = String::new();
 		file.read_to_string(&mut temp_str).unwrap();
+		//deserialize trace file into struct
 		let trace : Trace = serde_json::from_str(&temp_str).unwrap();
+
+		//nee to do all the linking done in the setup funcs
+		//so break where user breaks and continue till there - kinda shitty sol
+		//but dont have breaking via function implented yet so
+		let trace_regs = trace.get_trace_regs();
+		let mut bp = breakpoint::New(dbg.m_pid, trace_regs["rip"] as usize);
+		bp.enable().unwrap();
+		ptrace::cont(dbg.m_pid, None);
+		wait::waitpid(dbg.m_pid, None);
+		bp.disable().unwrap();
+
+		//set the regs
+		ptrace::setregs(dbg.m_pid, dict_to_regs(trace.get_trace_regs()));
 
 		let addr_maps = get_heap_and_stack(dbg);
 		
@@ -144,7 +169,7 @@ impl<'a> Trace<'a> {
 		}
 		if stack_start != 0 {
 			for (idx, stack_val) in trace.get_stack().iter().enumerate() {
-				dbg.write_mem(stack_start, *stack_val);
+				dbg.write_mem(stack_start + idx*8, *stack_val);
 			}
 		}
 		else {
@@ -153,23 +178,14 @@ impl<'a> Trace<'a> {
 
 		if heap_start != 0 {
 			for (idx, heap_val) in trace.get_heap().iter().enumerate() {
-				dbg.write_mem(heap_start, *heap_val);
+				dbg.write_mem(heap_start + idx*8, *heap_val);
 			}
 		}
 		else {
 			println!("Unable to restore heap!");
 		}
 
-		//INCREDIBLY HARDCODED, JUST TESTING FOR SOURCE OF BUG
-		let mut bp = breakpoint::New(dbg.m_pid, 0x55555555514d);
-		bp.enable().unwrap();
-		ptrace::cont(dbg.m_pid, None);
-		wait::waitpid(dbg.m_pid, None);
-		bp.disable().unwrap();
-
-		ptrace::setregs(dbg.m_pid, dict_to_regs(trace.get_trace_regs()));
 	
-		//pray that it works
 	}
 }
 

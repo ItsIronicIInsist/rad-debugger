@@ -28,7 +28,7 @@ pub enum dbg_cmd {
 
 pub struct Debugger<'a> {
 	pub m_pid: Pid, //pid of child
-	bp_table: bp_storage,
+	pub bp_table: bp_storage,
 	pub trace_file: Trace<'a>,
 	pub trace_enabled: bool,
 }
@@ -46,7 +46,7 @@ impl Debugger<'_> {
 
 	
 	//more for internal use rather than ofr direct handling of user commands
-	fn get_reg(pid: Pid, reg: &str) -> Result<u64, Errno> {
+	pub fn get_reg(pid: Pid, reg: &str) -> Result<u64, Errno> {
 		let regs =  match ptrace::getregs(pid) {
 			Ok(regs_val) => regs_val,
 			Err(err_num) => return Err(err_num),
@@ -55,7 +55,7 @@ impl Debugger<'_> {
 		Ok(regs[reg])
 	}
 
-	fn set_reg(pid: Pid, reg: &str, val: u64) -> Result<(), Errno> {
+	pub fn set_reg(pid: Pid, reg: &str, val: u64) -> Result<(), Errno> {
 		let regs =  match ptrace::getregs(pid) {
 			Ok(regs_val) => regs_val,
 			Err(err_num) => return Err(err_num),
@@ -216,13 +216,11 @@ impl Debugger<'_> {
 				}
 			}
 		}
-		else {
-			Debugger::set_reg(self.m_pid, "rip", addr as u64);
-		}
 		ptrace::cont(self.m_pid, None);
 		wait::waitpid(self.m_pid, None);
 
-		println!("{:?}", ptrace::getsiginfo(self.m_pid).unwrap());
+		//println!("{:?}", ptrace::getsiginfo(self.m_pid).unwrap());
+		
 	}
 
 	fn handle_breakpoints(&mut self, args: Vec<&str>) {

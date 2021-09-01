@@ -132,4 +132,11 @@ impl bp_storage {
 		}
 		Ok(())
 	}
+
+	pub fn contains(&self, idx: usize) -> bool {
+		if self.addr_list.contains(&idx) {
+			return true;
+		}
+		false
+	}
 }
