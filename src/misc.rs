@@ -68,7 +68,7 @@ pub fn regs_to_dict(registers: user_regs_struct) -> HashMap<&'static str, u64> {
 
 
 
-pub fn dict_to_regs(dict: HashMap<&str, u64>) -> user_regs_struct {
+pub fn dict_to_regs(dict: &HashMap<&str, u64>) -> user_regs_struct {
 	user_regs_struct {
 		rax: *dict.get("rax").unwrap(),
 		rbx: *dict.get("rbx").unwrap(),

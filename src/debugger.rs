@@ -14,7 +14,7 @@ use crate::breakpoint::{breakpoint, bp_storage};
 use crate::misc::*;
 use crate::format::*;
 use crate::dwarf_functionality::{get_func_from_pc, line_stuff};
-use crate::trace::trace;
+use crate::trace::Trace;
 
 use gimli::read::Dwarf;
 
@@ -29,8 +29,8 @@ pub enum dbg_cmd {
 pub struct Debugger<'a> {
 	pub m_pid: Pid, //pid of child
 	bp_table: bp_storage,
-	trace_file: trace<'a>,
-	trace_enabled: bool,
+	pub trace_file: Trace<'a>,
+	pub trace_enabled: bool,
 }
 
 
@@ -39,10 +39,11 @@ impl Debugger<'_> {
 		Debugger {
 			m_pid: child,
 			bp_table: bp_storage::New(),
-			trace_file: trace::New(),
+			trace_file: Trace::New(),
 			trace_enabled: false,
 		}
 	}
+
 	
 	//more for internal use rather than ofr direct handling of user commands
 	fn get_reg(pid: Pid, reg: &str) -> Result<u64, Errno> {
@@ -61,7 +62,7 @@ impl Debugger<'_> {
 		};
 		let mut regs : HashMap<&str, u64> = regs_to_dict(regs);
 		regs.insert(reg , val);
-		let regs = dict_to_regs(regs); 
+		let regs = dict_to_regs(&regs); 
 		
 		match ptrace::setregs(pid, regs) {
 			Ok(_) => Ok(()),
@@ -69,14 +70,14 @@ impl Debugger<'_> {
 		}
 	}
 
-	fn read_mem(&self, target_addr: usize) -> Result<u64, Errno> {
+	pub fn read_mem(&self, target_addr: usize) -> Result<u64, Errno> {
 		match ptrace::read(self.m_pid, target_addr as *mut c_void) {
 			Ok(mem_val) => Ok(mem_val as u64),
 			Err(err_num) => Err(err_num),
 		}
 	}
 
-	fn write_mem(&self, target_addr: usize, data: u64) {
+	pub fn write_mem(&self, target_addr: usize, data: u64) {
 		unsafe { ptrace::write(self.m_pid, target_addr as *mut c_void, data as *mut c_void); }
 	}
 
@@ -156,70 +157,32 @@ impl Debugger<'_> {
 				line_stuff(dwarf_info);
 			},
 			"snapshot"=> {
-				self.trace_program();	
+				Trace::trace_init(self);	
+			},
+			"restore" => {
+				self.restore_trace_entrance(args);
 			},
 			_ => {println!("Invalid command");},
 		};
 		dbg_result
 	}
 
-	fn trace_program(&mut self) {
-		//create the actual trace
-		let mut trace_var = trace::New();
-		let regs = match ptrace::getregs(self.m_pid) {
-			Ok(val) => val,
-			Err(err_num) => {
-				println!("Failed to retrieve registers with ptrace.\n Error code was {}", err_num);
-				return;
-			}
-		};
-		trace_var.set_trace_regs(regs_to_dict(regs));
-
-
-		//accessing the maps pseudofile for the debugee process
-		let file_path = String::from("/proc/") + &self.m_pid.to_string() + &String::from("/maps");
-		let file = File::open(&file_path).unwrap();
-		let buf_r = BufReader::new(file);
-		
-
-		for line_res in buf_r.lines() {
-			//want to catch the 'stack' and 'heap' mappings
-			let line = line_res.unwrap();
-			if line.contains("stack") || line.contains("heap") {
-			
-				//proc_maps entry starts with smn like: 23120000-24220000 [junk]
-				//which we re grabbing
-				let mem_range : Vec<&str>  = line.split(" ").collect();
-				let mem_range = mem_range[0];
-				
-				//then turning into actual numbers
-				//index 0 is start address, index 1 is end address
-				let mem_vals : Vec<&str> = mem_range.split("-").collect();
-				let mem_vals : Vec<usize> = mem_vals.iter().map(|x| {usize::from_str_radix(x,16).unwrap()}).collect();
-				let addr_start = mem_vals[0];
-				let addr_end = mem_vals[1];
-
-				//we will be reading a word at a time
-				let range = (addr_end-addr_start)/8;
-				
-				for i in (0..range) {
-					let mem_val = self.read_mem(addr_start + i*8).unwrap();
-
-					if line.contains("stack") {
-						trace_var.stack_append(mem_val);
-					}
-					else {
-						trace_var.heap_append(mem_val);
-					}
-				}		
-			}
+	fn restore_trace_entrance(&self, args: Vec<&str>) {
+		if args.len() < 2 {
+			println!("File must be specified");
 		}
-		let mut actual_trace_file = File::create("trace").unwrap();
-		let json = serde_json::to_writer(&actual_trace_file, &trace_var).unwrap();
-		
-		self.trace_file = trace_var;
-		self.trace_enabled = true;
+
+		let mut file = match File::open(args[1]) {
+			Ok(result) => result,
+			Err(err)=> {
+				println!("error in opening file. Error was {:?}", err.kind()); 
+				return;
+			},
+		};
+
+		Trace::restore(&mut file, self);
 	}
+
 
 	fn continue_exec(&mut self) {
 		//get value of pc
@@ -253,10 +216,13 @@ impl Debugger<'_> {
 				}
 			}
 		}
-		
+		else {
+			Debugger::set_reg(self.m_pid, "rip", addr as u64);
+		}
 		ptrace::cont(self.m_pid, None);
 		wait::waitpid(self.m_pid, None);
-//		println!("{:?}", ptrace::getsiginfo(self.m_pid).unwrap());
+
+		println!("{:?}", ptrace::getsiginfo(self.m_pid).unwrap());
 	}
 
 	fn handle_breakpoints(&mut self, args: Vec<&str>) {
