@@ -4,6 +4,8 @@ use nix::sys::{wait, ptrace};
 use rustyline::{Editor,Helper};
 
 use std::collections::HashMap;
+use std::fs::{File};
+use std::io::{BufReader,BufRead,Write};
 
 use core::ffi::c_void;
 use core::ops::Range;
@@ -12,8 +14,11 @@ use crate::breakpoint::{breakpoint, bp_storage};
 use crate::misc::*;
 use crate::format::*;
 use crate::dwarf_functionality::{get_func_from_pc, line_stuff};
+use crate::trace::trace;
 
 use gimli::read::Dwarf;
+
+use serde_json::{to_string};
 
 pub enum dbg_cmd {
 	Exit,
@@ -21,20 +26,21 @@ pub enum dbg_cmd {
 	Continue,
 }
 
-pub struct Debugger {
+pub struct Debugger<'a> {
 	pub m_pid: Pid, //pid of child
 	bp_table: bp_storage,
-	//bp_table: HashMap<usize, breakpoint>, //hashmap of all breakpoints currently set
-	valid_mem: Vec<Range<usize>>, //All valid memory addresses, to be checked before each memory access
+	trace_file: trace<'a>,
+	trace_enabled: bool,
 }
 
 
-impl Debugger {
-	pub fn New(child: Pid) -> Debugger {
+impl Debugger<'_> {
+	pub fn New(child: Pid) -> Debugger<'static> {
 		Debugger {
 			m_pid: child,
 			bp_table: bp_storage::New(),
-			valid_mem: Vec::new(),
+			trace_file: trace::New(),
+			trace_enabled: false,
 		}
 	}
 	
@@ -138,20 +144,81 @@ impl Debugger {
 			},
 			"exit" => {
 				dbg_result = dbg_cmd::Exit;
-			}
+			},
 			"restart" => {
 				dbg_result = dbg_cmd::Restart;
-			}
+			},
 			"dwarf" => {
 				match get_func_from_pc(dwarf_info, 0x113e) {
 					Some(die) => {println!("{:?}",die);},
 					None => {},
 				}
 				line_stuff(dwarf_info);
-			}
+			},
+			"snapshot"=> {
+				self.trace_program();	
+			},
 			_ => {println!("Invalid command");},
 		};
 		dbg_result
+	}
+
+	fn trace_program(&mut self) {
+		//create the actual trace
+		let mut trace_var = trace::New();
+		let regs = match ptrace::getregs(self.m_pid) {
+			Ok(val) => val,
+			Err(err_num) => {
+				println!("Failed to retrieve registers with ptrace.\n Error code was {}", err_num);
+				return;
+			}
+		};
+		trace_var.set_trace_regs(regs_to_dict(regs));
+
+
+		//accessing the maps pseudofile for the debugee process
+		let file_path = String::from("/proc/") + &self.m_pid.to_string() + &String::from("/maps");
+		let file = File::open(&file_path).unwrap();
+		let buf_r = BufReader::new(file);
+		
+
+		for line_res in buf_r.lines() {
+			//want to catch the 'stack' and 'heap' mappings
+			let line = line_res.unwrap();
+			if line.contains("stack") || line.contains("heap") {
+			
+				//proc_maps entry starts with smn like: 23120000-24220000 [junk]
+				//which we re grabbing
+				let mem_range : Vec<&str>  = line.split(" ").collect();
+				let mem_range = mem_range[0];
+				
+				//then turning into actual numbers
+				//index 0 is start address, index 1 is end address
+				let mem_vals : Vec<&str> = mem_range.split("-").collect();
+				let mem_vals : Vec<usize> = mem_vals.iter().map(|x| {usize::from_str_radix(x,16).unwrap()}).collect();
+				let addr_start = mem_vals[0];
+				let addr_end = mem_vals[1];
+
+				//we will be reading a word at a time
+				let range = (addr_end-addr_start)/8;
+				
+				for i in (0..range) {
+					let mem_val = self.read_mem(addr_start + i*8).unwrap();
+
+					if line.contains("stack") {
+						trace_var.stack_append(mem_val);
+					}
+					else {
+						trace_var.heap_append(mem_val);
+					}
+				}		
+			}
+		}
+		let mut actual_trace_file = File::create("trace").unwrap();
+		let json = serde_json::to_writer(&actual_trace_file, &trace_var).unwrap();
+		
+		self.trace_file = trace_var;
+		self.trace_enabled = true;
 	}
 
 	fn continue_exec(&mut self) {

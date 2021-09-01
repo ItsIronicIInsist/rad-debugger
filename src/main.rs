@@ -20,6 +20,7 @@ mod breakpoint;
 mod misc;
 mod format;
 mod dwarf_functionality;
+mod trace;
 
 use debugger::*;
 
