@@ -11,11 +11,13 @@ use crate::debugger::Debugger;
 use crate::misc::{regs_to_dict,dict_to_regs};
 use crate::breakpoint::breakpoint;
 
+#[derive(PartialEq)]
+pub enum TraceState {
+	Tracing,
+	Restoring,
+	Disabled,
+}
 
-//Slightly janky but when 'restoring trace', have to run the _start and dl_start and all tha
-//to do all the dynamic linking. To detect when thats finished, we check when rip isnt in 'the shared library section'
-//because used code is always palced somewhere in 0x5500000000000
-const SHARED_LIB_BASE_ADDR : u64 = 0x7f0000000000;
 
 #[derive(Serialize,Deserialize)]
 pub struct Trace<'a> {
@@ -28,7 +30,7 @@ pub struct Trace<'a> {
 
 	
 	//reg values after each syscall. Dunno how to structure to include scratch buffers
-	//syscalls: Vec<HashMap<&str, u64>>,
+	syscalls: Vec<HashMap<&'a str, u64>>,
 	
 	//scratch buffers - vector to match syscalls
 	//not all syscalls take a pointer to some buffer ( so option)
@@ -49,11 +51,16 @@ impl<'a> Trace<'a> {
 			regs: HashMap::new(),
 			stack: Vec::new(),
 			heap: Vec::new(),
+			syscalls: Vec::new(),
 		}
 	}
 
 	pub fn stack_append(&mut self, val: u64) {
 		self.stack.push(val);
+	}
+
+	pub fn heap_append(&mut self, val: u64) {
+		self.heap.push(val);
 	}
 
 	pub fn get_stack(&self) ->  &Vec<u64> {
@@ -64,9 +71,12 @@ impl<'a> Trace<'a> {
 		&self.heap
 	}
 
+	pub fn syscalls_append(&mut self, regs: HashMap<&'a str, u64>) {
+		self.syscalls.push(regs);
+	}
 
-	pub fn heap_append(&mut self, val: u64) {
-		self.heap.push(val);
+	pub fn get_syscalls(&self) -> &Vec<HashMap<&str, u64>> {
+		&self.syscalls
 	}
 
 	pub fn set_trace_regs(&mut self, regs: HashMap<&'a str,u64>) {
@@ -122,18 +132,26 @@ impl<'a> Trace<'a> {
 		let json = serde_json::to_writer(&actual_trace_file, &trace_var).unwrap();
 		
 		dbg.trace_file = trace_var;
-		dbg.trace_enabled = true;
+		dbg.trace_state = TraceState::Tracing;
 	}
 
 
-	pub fn restore(file: &mut File, dbg: &Debugger) {
-		//might need tow rap the fie in a BufReader
-		let mut temp_str = String::new();
-		file.read_to_string(&mut temp_str).unwrap();
-		//deserialize trace file into struct
-		let trace : Trace = serde_json::from_str(&temp_str).unwrap();
+	pub fn restore(file: &mut File, dbg: &mut Debugger) {
+		static mut temp_str : std::string::String = String::new();
+		let mut trace : Trace;
 
-		//nee to do all the linking done in the setup funcs
+		//spooky unsafe block
+		//mutable statics cause concurrency problems but we arent multithreaded
+		//string mst be static to avoid lifetime issues - I would do serde::from_writer
+		//but then trace needs ti implement DeserializeOwned, and thats a rabbit hole of learning how serde actually works
+		//rather than just deriving the Deserialize trait (less general than DeserializeOwned)
+		unsafe {
+			file.read_to_string(&mut temp_str).unwrap();
+			//deserialize trace file into struct
+			trace = serde_json::from_str(&temp_str).unwrap();
+		}
+
+		//need to do all the linking done in the setup funcs
 		//so break where user breaks and continue till there - kinda shitty sol
 		//but dont have breaking via function implented yet so
 		let trace_regs = trace.get_trace_regs();
@@ -184,7 +202,9 @@ impl<'a> Trace<'a> {
 		else {
 			println!("Unable to restore heap!");
 		}
-
+		
+		dbg.trace_file = trace;
+		dbg.trace_state = TraceState::Restoring;
 	
 	}
 }

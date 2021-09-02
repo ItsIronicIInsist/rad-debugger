@@ -14,7 +14,7 @@ use crate::breakpoint::{breakpoint, bp_storage};
 use crate::misc::*;
 use crate::format::*;
 use crate::dwarf_functionality::{get_func_from_pc, line_stuff};
-use crate::trace::Trace;
+use crate::trace::{TraceState, Trace};
 
 use gimli::read::Dwarf;
 
@@ -30,7 +30,7 @@ pub struct Debugger<'a> {
 	pub m_pid: Pid, //pid of child
 	pub bp_table: bp_storage,
 	pub trace_file: Trace<'a>,
-	pub trace_enabled: bool,
+	pub trace_state: TraceState,
 }
 
 
@@ -40,7 +40,7 @@ impl Debugger<'_> {
 			m_pid: child,
 			bp_table: bp_storage::New(),
 			trace_file: Trace::New(),
-			trace_enabled: false,
+			trace_state: TraceState::Disabled,
 		}
 	}
 
@@ -145,6 +145,8 @@ impl Debugger<'_> {
 			},
 			"exit" => {
 				dbg_result = dbg_cmd::Exit;
+				let mut actual_trace_file = File::create("trace").unwrap();
+				let json = serde_json::to_writer(&actual_trace_file, &self.trace_file).unwrap();
 			},
 			"restart" => {
 				dbg_result = dbg_cmd::Restart;
@@ -167,7 +169,7 @@ impl Debugger<'_> {
 		dbg_result
 	}
 
-	fn restore_trace_entrance(&self, args: Vec<&str>) {
+	fn restore_trace_entrance(&mut self, args: Vec<&str>) {
 		if args.len() < 2 {
 			println!("File must be specified");
 		}
@@ -216,10 +218,46 @@ impl Debugger<'_> {
 				}
 			}
 		}
-		ptrace::cont(self.m_pid, None);
-		wait::waitpid(self.m_pid, None);
 
-		//println!("{:?}", ptrace::getsiginfo(self.m_pid).unwrap());
+		if self.trace_state == TraceState::Tracing {
+			//need to loop because we dont want user to notice us breaking on syscalls
+			//so we speed by for each syscall, and only stop if signal generated is for something besides a syscall (probs a breakpoint)
+			loop {
+				ptrace::syscall(self.m_pid, None);
+				wait::waitpid(self.m_pid, None);
+				let siginfo = ptrace::getsiginfo(self.m_pid).unwrap();
+			
+				//if we are tracing, we need to get the signal info for each event
+				//For both breakpoints and stoped caused by SYSCALL, the signo is 5
+				//but for sysem the code is also 5. Have to check the signo to make sure its not something like a sigsegv signal or smn
+				if siginfo.si_signo == 5 && siginfo.si_code == 5 {
+							
+					ptrace::syscall(self.m_pid, None);
+					wait::waitpid(self.m_pid, None);
+					//println!("{:?}", wait::waitpid(self.m_pid, None).unwrap());
+						
+					let regs = regs_to_dict(ptrace::getregs(self.m_pid).unwrap());
+					self.trace_file.syscalls_append(regs);
+
+					let siginfo_a = ptrace::getsiginfo(self.m_pid).unwrap();
+					//println!("{:?}", siginfo_a);
+				}
+				//it wasnt a syscall signal that caused the pause - probably a breakpoint
+				else {
+					break
+				}
+			}
+		}
+		else if self.trace_state == TraceState::Restoring {
+			ptrace::sysemu(self.m_pid, None);
+			wait::waitpid(self.m_pid, None);
+		}
+		else {
+			ptrace::cont(self.m_pid, None);
+			wait::waitpid(self.m_pid, None);
+		}
+		
+		
 		
 	}
 
